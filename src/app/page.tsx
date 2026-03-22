@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { ThumbsUp, ChevronDown, LogOut, MessageSquare, Send } from 'lucide-react'
+import { ChevronUp, ChevronDown, LogOut, MessageSquare, Send } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 
 interface Question {
@@ -21,20 +21,20 @@ interface Reply {
   created_at: string
 }
 
-const VOTED_KEY = 'atc_voted'
+const VOTES_KEY = 'atc_votes'
 
-function getVotedIds(): Set<string> {
-  if (typeof window === 'undefined') return new Set()
+function getVoteMap(): Record<string, 'up' | 'down'> {
+  if (typeof window === 'undefined') return {}
   try {
-    const raw = localStorage.getItem(VOTED_KEY)
-    return raw ? new Set(JSON.parse(raw)) : new Set()
+    const raw = localStorage.getItem(VOTES_KEY)
+    return raw ? JSON.parse(raw) : {}
   } catch {
-    return new Set()
+    return {}
   }
 }
 
-function saveVotedIds(ids: Set<string>) {
-  localStorage.setItem(VOTED_KEY, JSON.stringify(Array.from(ids)))
+function saveVoteMap(map: Record<string, 'up' | 'down'>) {
+  localStorage.setItem(VOTES_KEY, JSON.stringify(map))
 }
 
 function sorted(qs: Question[]): Question[] {
@@ -74,7 +74,7 @@ export default function Home() {
   const [questionText, setQuestionText] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
-  const [votedIds, setVotedIds] = useState<Set<string>>(new Set())
+  const [voteMap, setVoteMap] = useState<Record<string, 'up' | 'down'>>({})
 
   // Replies
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -132,7 +132,7 @@ export default function Home() {
 
   useEffect(() => {
     if (!authReady) return
-    setVotedIds(getVotedIds())
+    setVoteMap(getVoteMap())
     fetchQuestions()
   }, [authReady, fetchQuestions])
 
@@ -183,17 +183,23 @@ export default function Home() {
     setQuestionText('')
   }
 
-  async function handleVote(id: string) {
-    if (votedIds.has(id)) return
-    const updated = new Set(votedIds)
-    updated.add(id)
-    setVotedIds(updated)
-    saveVotedIds(updated)
+  async function handleVote(id: string, direction: 'up' | 'down') {
+    const current = voteMap[id]
+    if (current === direction) return // already voted this way
+
+    // calculate delta: switching = ±2, fresh vote = ±1
+    const delta = direction === 'up'
+      ? (current === 'down' ? 2 : 1)
+      : (current === 'up' ? -2 : -1)
+
+    const updated = { ...voteMap, [id]: direction }
+    setVoteMap(updated)
+    saveVoteMap(updated)
     setQuestions(prev =>
-      sorted(prev.map(q => (q.id === id ? { ...q, vote_count: q.vote_count + 1 } : q)))
+      sorted(prev.map(q => (q.id === id ? { ...q, vote_count: q.vote_count + delta } : q)))
     )
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (supabase as any).rpc('increment_vote', { question_id: id })
+    await (supabase as any).rpc('adjust_vote', { question_id: id, delta })
   }
 
   async function handleReply(questionId: string) {
@@ -315,7 +321,7 @@ export default function Home() {
         ) : (
           <div className="space-y-3">
             {questions.map(q => {
-              const voted = votedIds.has(q.id)
+              const myVote = voteMap[q.id]
               const isExpanded = expandedId === q.id
               const threadReplies = replies[q.id] || []
               const replyCount = replyCounts[q.id] || 0
@@ -330,20 +336,34 @@ export default function Home() {
                     {/* Vote column */}
                     <div className="flex flex-col items-center gap-0.5 shrink-0 pt-0.5">
                       <button
-                        onClick={() => handleVote(q.id)}
-                        disabled={voted}
+                        onClick={() => handleVote(q.id, 'up')}
                         aria-label="Upvote"
-                        className={`p-1.5 rounded-lg transition ${
-                          voted
-                            ? 'text-[#7c3aed] bg-[#7c3aed]/10 cursor-default'
+                        className={`p-1 rounded-md transition ${
+                          myVote === 'up'
+                            ? 'text-[#7c3aed] bg-[#7c3aed]/10'
                             : 'text-[#555] hover:text-[#7c3aed] hover:bg-[#7c3aed]/10'
                         }`}
                       >
-                        <ThumbsUp size={15} />
+                        <ChevronUp size={16} />
                       </button>
-                      <span className={`text-xs font-bold tabular-nums ${voted ? 'text-[#7c3aed]' : 'text-[#555]'}`}>
+                      <span className={`text-xs font-bold tabular-nums ${
+                        myVote === 'up' ? 'text-[#7c3aed]'
+                        : myVote === 'down' ? 'text-red-400'
+                        : 'text-[#555]'
+                      }`}>
                         {q.vote_count}
                       </span>
+                      <button
+                        onClick={() => handleVote(q.id, 'down')}
+                        aria-label="Downvote"
+                        className={`p-1 rounded-md transition ${
+                          myVote === 'down'
+                            ? 'text-red-400 bg-red-400/10'
+                            : 'text-[#555] hover:text-red-400 hover:bg-red-400/10'
+                        }`}
+                      >
+                        <ChevronDown size={16} />
+                      </button>
                     </div>
 
                     {/* Content */}
